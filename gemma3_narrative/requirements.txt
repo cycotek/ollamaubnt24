@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+python-dotenv
+aiohttp
+newspaper3k
+pydantic
+lxml-html-clean

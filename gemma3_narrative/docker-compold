@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  ollama:
+    build:
+      context: ./ollama
+    container_name: ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./ollama_startup.sh:/usr/local/bin/ollama_startup.sh
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    command: ["/bin/sh", "-c", "/usr/local/bin/ollama_startup.sh"]
+
+  api_server:
+    build:
+      context: .
+    container_name: api_server
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_HOST=host.docker.internal
+      - DATABASE_URL=postgresql+asyncpg://${DATABASE_USER}:${DATABASE_PASS}@${DATABASE_HOST}:5432/${DATABASE_NAME}
+      - API_KEY=${API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "8080:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: always
+
+  scraper_agent:
+    build:
+      context: .
+      dockerfile: agents/scraper/Dockerfile
+    container_name: scraper_agent
+    env_file:
+      - .env
+    environment:
+      - DATABASE_HOST=host.docker.internal
+      - DATABASE_URL=postgresql+asyncpg://${DATABASE_USER}:${DATABASE_PASS}@${DATABASE_HOST}:5432/${DATABASE_NAME}
+      - OLLAMA_HOST=http://ollama:11434
+    command: ["python", "scraper.py"]
+    restart: on-failure
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      api_server:
+        condition: service_healthy
+
+volumes:
+  ollama_data:
+  open-webui-data:
