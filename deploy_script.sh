@@ -1,0 +1,54 @@
+#!/bin/bash
+# -----------------------------------------------------------
+# Automated AI Server Setup Script (Ubuntu 24.04)
+# This script installs Docker, NVIDIA Container Toolkit, PostgreSQL,
+# and configures the system for a multi-user environment.
+# -----------------------------------------------------------
+
+set -euo pipefail
+
+# --- 1. Define Variables ---
+DB_USER="agent_user"
+DB_PASS="YOUR_STRONG_POSTGRES_PASSWORD" # !!! CHANGE THIS !!!
+DB_NAME="aiserver_db"
+PG_VERSION=$(pg_config --version 2>/dev/null | awk '{print $2}' | cut -d. -f1 || echo 16)
+USERNAME=$(whoami)
+
+echo "--- Initializing AI Server Setup ---"
+
+# --- 2. Install Core Dependencies ---
+echo "--- Installing OS dependencies and Docker ---"
+sudo apt update
+sudo apt install -y curl wget git postgresql postgresql-contrib build-essential libpq-dev dos2unix
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+
+# --- 3. Install NVIDIA Container Toolkit ---
+echo "--- Installing NVIDIA Container Toolkit for GPU access ---"
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt update
+sudo apt install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# Add current user to the docker group to run without sudo
+sudo usermod -aG docker "$USERNAME"
+echo "✅ Docker and NVIDIA setup complete. You must RE-LOGIN for Docker group changes to take effect."
+
+# --- 4. PostgreSQL Setup on Host ---
+echo "--- Configuring PostgreSQL on Host ---"
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+sudo -u postgres createdb $DB_NAME
+sudo -u postgres psql -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+sudo -u postgres psql -c "ALTER USER $DB_USER CREATEDB;"
+sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres psql -d "$DB_NAME" -c "GRANT CREATE ON SCHEMA public TO $DB_USER;"
+
+# --- 5. Configure PostgreSQL to Accept Remote Connections ---
+sudo sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" /etc/postgresql/"$PG_VERSION"/main/postgresql.conf
+sudo bash -c "echo 'host    all             all             172.17.0.0/16           scram-sha-256' >> /etc/postgresql/$PG_VERSION/main/pg_hba.conf"
+sudo systemctl restart postgresql
+
+echo "--- Setup complete. Remember to RE-LOGIN now, then run the build_project_structure.sh script. ---"
