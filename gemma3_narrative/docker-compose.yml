@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   ollama:
     build:
@@ -28,13 +30,14 @@ services:
     environment:
       POSTGRES_USER: ${DATABASE_USER}
       POSTGRES_PASSWORD: ${DATABASE_PASS}
-      POSTGRES_DB: gemma3_db
+      POSTGRES_DB: ${DATABASE_NAME}
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      # FIX 1: Use the custom user defined in the .env file for the readiness check.
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,6 +46,8 @@ services:
     build: .
     container_name: gemma3_api
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +55,7 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    # FIX 2: Use the service name 'db' directly in the wait-for-postgres script.
     command: /bin/sh -c "./wait-for-postgres.sh db 5432 && uvicorn main:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8000/docs"]
@@ -79,6 +85,8 @@ services:
       dockerfile: agents/scraper/Dockerfile
     container_name: gemma3_scraper
     restart: on-failure
+    env_file:
+      - .env
     depends_on:
       ollama:
         condition: service_healthy
@@ -94,6 +102,8 @@ services:
       dockerfile: agents/insert_nodes/Dockerfile
     container_name: gemma3_inserter
     restart: on-failure
+    env_file:
+      - .env
     depends_on:
       api_server:
         condition: service_healthy
