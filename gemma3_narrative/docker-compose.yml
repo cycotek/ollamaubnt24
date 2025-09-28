@@ -87,13 +87,12 @@ services:
     restart: on-failure
     env_file:
       - .env
+    # REMOVED EXTRA_HOSTS BLOCK - DATABASE_HOST resolves internally to 'db'
     depends_on:
       ollama:
         condition: service_healthy
       api_server:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: ["python", "scraper.py"]
 
   inserter_agent:
@@ -104,13 +103,15 @@ services:
     restart: on-failure
     env_file:
       - .env
+    # REMOVED EXTRA_HOSTS BLOCK - DATABASE_HOST resolves internally to 'db'
     depends_on:
       api_server:
         condition: service_healthy
       ollama:
         condition: service_healthy
     environment:
-      - DATABASE_HOST=host.docker.internal
+      # CRITICAL: DATABASE_HOST now points to the service name 'db'
+      - DATABASE_HOST=db
       - DATABASE_URL=postgresql+asyncpg://${DATABASE_USER}:${DATABASE_PASS}@${DATABASE_HOST}:5432/${DATABASE_NAME}
 
 volumes:
