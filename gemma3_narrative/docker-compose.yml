@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # --- 1. Ollama GPU Service (LLM Inference) ---
   ollama:
     build:
       context: ./ollama
@@ -18,16 +19,19 @@ services:
       - ollama_models:/root/.ollama
     restart: always
     healthcheck:
+      # Checks if the API is up, indicating models are being served (or downloading)
       test: ["CMD", "curl", "--fail", "http://localhost:11434"]
       interval: 30s
       timeout: 10s
       retries: 5
 
+  # --- 2. Postgres with pgvector (Database Backend) ---
   db:
     image: ankane/pgvector:latest
     container_name: gemma3_db
     restart: always
     environment:
+      # Creates the user and database from the .env file upon first launch
       POSTGRES_USER: ${DATABASE_USER}
       POSTGRES_PASSWORD: ${DATABASE_PASS}
       POSTGRES_DB: ${DATABASE_NAME}
@@ -36,18 +40,20 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      # FIX 1: Use the custom user defined in the .env file for the readiness check.
+      # Checks if the DB is ready to accept TCP connections using the custom user
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # --- 3. FastAPI Main API Server (Application Logic) ---
   api_server:
     build: .
     container_name: gemma3_api
     restart: unless-stopped
     env_file:
       - .env
+    # Wait for DB to be healthy and Ollama to be available before starting
     depends_on:
       db:
         condition: service_healthy
@@ -55,16 +61,17 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
-    # FIX 2: Use the service name 'db' directly in the wait-for-postgres script.
+    # Execute wait-for-postgres.sh to ensure DB is accepting connections before starting FastAPI
     command: /bin/sh -c "./wait-for-postgres.sh db 5432 && uvicorn main:app --host 0.0.0.0 --port 8000"
     healthcheck:
+      # Checks if the FastAPI server is responsive
       test: ["CMD", "curl", "--fail", "http://localhost:8000/docs"]
       interval: 30s
       timeout: 10s
       retries: 5
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # NOTE: extra_hosts for host.docker.internal removed; containers communicate via service name 'db'
 
+  # --- 4. Open WebUI (Model Interface) ---
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: gemma3_open-webui
@@ -77,8 +84,10 @@ services:
         condition: service_healthy
     restart: always
     environment:
+      # Connects to the Ollama service via Docker DNS
       - OLLAMA_HOST=http://ollama:11434
 
+  # --- 5. Scraper Agent ---
   scraper_agent:
     build:
       context: .
@@ -87,15 +96,16 @@ services:
     restart: on-failure
     env_file:
       - .env
+    # Wait for the API and Ollama before scraping
     depends_on:
       ollama:
         condition: service_healthy
       api_server:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Uses the internal Docker DNS name 'ollama' and internal host 'db' (from .env)
     command: ["python", "scraper.py"]
 
+  # --- 6. Inserter Agent ---
   inserter_agent:
     build:
       context: .
@@ -109,9 +119,8 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
-    environment:
-      - DATABASE_HOST=host.docker.internal
-      - DATABASE_URL=postgresql+asyncpg://${DATABASE_USER}:${DATABASE_PASS}@${DATABASE_HOST}:5432/${DATABASE_NAME}
+    # Uses the internal Docker DNS name 'db' (from .env)
+    command: ["python", "agents/insert_nodes/insert_nodes.py"]
 
 volumes:
   ollama_models:
